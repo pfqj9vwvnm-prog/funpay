@@ -47,6 +47,7 @@ def get_user_data(user_id: int):
     if user_id not in users_db:
         users_db[user_id] = {
             "currency": "USDT",
+            "uzs_enabled": True,  # По умолчанию UZS включен
             "balances": {
                 "USDT": 0.0,
                 "RUB": 0.0,
@@ -55,6 +56,11 @@ def get_user_data(user_id: int):
             "channels": ["YT SHORTS • zuckerberg_br"]
         }
     return users_db[user_id]
+
+def get_next_currency(current_currency: str, uzs_enabled: bool) -> str:
+    if not uzs_enabled:
+        return "RUB" if current_currency == "USDT" else "USDT"
+    return CURRENCY_CONFIG[current_currency]["next"]
 
 # --- Клавиатуры ---
 
@@ -98,8 +104,8 @@ def get_apply_category_keyboard():
     builder.adjust(2, 2, 1, 2)
     return builder.as_markup()
 
-def get_balance_keyboard(current_currency: str):
-    next_curr = CURRENCY_CONFIG[current_currency]["next"]
+def get_balance_keyboard(current_currency: str, uzs_enabled: bool = True):
+    next_curr = get_next_currency(current_currency, uzs_enabled)
     builder = InlineKeyboardBuilder()
     builder.button(text="Вывод", callback_data="btn_withdraw")
     builder.button(text=f"Сменить валюту на {next_curr}", callback_data="btn_change_currency")
@@ -158,6 +164,23 @@ async def process_main_menu(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.edit_text(text, reply_markup=get_main_keyboard())
     await callback.answer()
 
+# --- Команды показа/скрытия UZS (/showuzs и /hideuzs) ---
+
+@dp.message(Command("showuzs"))
+async def cmd_showuzs(message: types.Message):
+    data = get_user_data(message.from_user.id)
+    data["uzs_enabled"] = True
+    await message.answer("✅ Валюта UZS включена.")
+
+@dp.message(Command("hideuzs"))
+async def cmd_hideuzs(message: types.Message):
+    data = get_user_data(message.from_user.id)
+    data["uzs_enabled"] = False
+    # Если текущая валюта была UZS, переключаем на USDT
+    if data["currency"] == "UZS":
+        data["currency"] = "USDT"
+    await message.answer("✅ Валюта UZS скрыта.")
+
 # --- Команды пополнения и сброса (/usdt, /usd, /rub, /uzs, /zero) ---
 
 async def handle_add_balance(message: types.Message, command: CommandObject, currency: str):
@@ -194,7 +217,7 @@ async def cmd_zero(message: types.Message):
     data["balances"]["UZS"] = 0.0
     await message.answer("✅ Все ваши балансы успешно обнулены.")
 
-# --- Вспомогательная функция отрисовки баланса ---
+# --- Отрисовка баланса ---
 
 async def render_balance_screen(callback: types.CallbackQuery):
     data = get_user_data(callback.from_user.id)
@@ -206,11 +229,17 @@ async def render_balance_screen(callback: types.CallbackQuery):
     text = (
         f"Ваш баланс: {display_balance} {curr}.\n\n"
         f"Минимальная сумма вывода: {cfg['min_withdraw']}.\n"
-        f"Максимальная сумма вывода: {cfg['max_withdraw']}.\n\n"
-        "‼️ После одобрения клипов средства начисляются на баланс канала.\n"
-        "Чтобы вывести, переведите их на баланс для вывода через меню управления каналами."
+        f"Максимальная сумма вывода: {cfg['max_withdraw']}."
     )
-    await callback.message.edit_text(text, reply_markup=get_balance_keyboard(curr))
+    
+    # Текст предупреждения выводится только для USDT
+    if curr == "USDT":
+        text += (
+            "\n\n‼️ После одобрения клипов средства начисляются на баланс канала.\n"
+            "Чтобы вывести, переведите их на баланс для вывода через меню управления каналами."
+        )
+    
+    await callback.message.edit_text(text, reply_markup=get_balance_keyboard(curr, data["uzs_enabled"]))
 
 # --- 1. Раздел: Реквизиты ---
 
@@ -262,7 +291,7 @@ async def process_balance(callback: types.CallbackQuery):
 async def process_change_currency(callback: types.CallbackQuery):
     data = get_user_data(callback.from_user.id)
     current_curr = data["currency"]
-    data["currency"] = CURRENCY_CONFIG[current_curr]["next"]
+    data["currency"] = get_next_currency(current_curr, data["uzs_enabled"])
     await render_balance_screen(callback)
     await callback.answer()
 
