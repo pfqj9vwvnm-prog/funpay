@@ -18,13 +18,40 @@ dp = Dispatcher(storage=MemoryStorage())
 class ChannelAddState(StatesGroup):
     waiting_for_link = State()
 
+# --- Конфигурация валют ---
+CURRENCY_CONFIG = {
+    "USDT": {
+        "min_withdraw": "12.0 USDT",
+        "min_value": 12.0,
+        "max_withdraw": "— USDT",
+        "next": "RUB"
+    },
+    "RUB": {
+        "min_withdraw": "1000.0 RUB",
+        "min_value": 1000.0,
+        "max_withdraw": "— RUB",
+        "next": "UZS"
+    },
+    "UZS": {
+        "min_withdraw": "150000.00 UZS",
+        "min_value": 150000.0,
+        "max_withdraw": "— UZS",
+        "next": "USDT"
+    }
+}
+
 # --- База данных в памяти ---
 users_db = {}
 
 def get_user_data(user_id: int):
     if user_id not in users_db:
         users_db[user_id] = {
-            "balance": 0.0,
+            "currency": "USDT",
+            "balances": {
+                "USDT": 0.0,
+                "RUB": 0.0,
+                "UZS": 0.0
+            },
             "channels": ["YT SHORTS • zuckerberg_br"]
         }
     return users_db[user_id]
@@ -37,7 +64,6 @@ def get_main_keyboard():
     builder.button(text="Подача заявки", callback_data="btn_apply")
     builder.button(text="Баланс и вывод", callback_data="btn_balance")
     builder.button(text="Управление каналами", callback_data="btn_channels")
-    # Кнопка с прямой ссылкой в поддержку
     builder.button(text="Написать в поддержку", url="https://t.me/lixiauto")
     builder.button(text="Активные заявки", callback_data="btn_active_requests")
     builder.button(text="Правила и материалы", callback_data="btn_rules")
@@ -72,10 +98,11 @@ def get_apply_category_keyboard():
     builder.adjust(2, 2, 1, 2)
     return builder.as_markup()
 
-def get_balance_keyboard():
+def get_balance_keyboard(current_currency: str):
+    next_curr = CURRENCY_CONFIG[current_currency]["next"]
     builder = InlineKeyboardBuilder()
     builder.button(text="Вывод", callback_data="btn_withdraw")
-    builder.button(text="Сменить валюту на RUB", callback_data="btn_change_currency")
+    builder.button(text=f"Сменить валюту на {next_curr}", callback_data="btn_change_currency")
     builder.button(text="Назад", callback_data="btn_main_menu")
     builder.adjust(1)
     return builder.as_markup()
@@ -131,28 +158,59 @@ async def process_main_menu(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.edit_text(text, reply_markup=get_main_keyboard())
     await callback.answer()
 
-# --- Баланс (Команды /money и /zero) ---
+# --- Команды пополнения и сброса (/usdt, /usd, /rub, /uzs, /zero) ---
 
-@dp.message(Command("money"))
-async def cmd_money(message: types.Message, command: CommandObject):
+async def handle_add_balance(message: types.Message, command: CommandObject, currency: str):
     if command.args is None:
-        await message.answer("⚠️ Ошибка: введите команду в формате `/money <количество>`", parse_mode="Markdown")
+        await message.answer(f"⚠️ Ошибка: введите команду в формате `/{command.command} <количество>`", parse_mode="Markdown")
         return
     try:
         amount = float(command.args.replace(',', '.'))
         data = get_user_data(message.from_user.id)
-        data["balance"] += amount
-        new_balance = data["balance"]
+        data["balances"][currency] += amount
+        new_balance = data["balances"][currency]
         display_balance = int(new_balance) if new_balance.is_integer() else new_balance
-        await message.answer(f"✅ Баланс пополнен на **{amount}** USDT.\nТекущий баланс: **{display_balance}** USDT.", parse_mode="Markdown")
+        await message.answer(f"✅ Баланс пополнен на **{amount}** {currency}.\nТекущий баланс ({currency}): **{display_balance}** {currency}.", parse_mode="Markdown")
     except ValueError:
-        await message.answer("⚠️ Ошибка: введите число (например, `/money 15.5`)", parse_mode="Markdown")
+        await message.answer("⚠️ Ошибка: введите корректное число", parse_mode="Markdown")
+
+@dp.message(Command("usdt", "usd"))
+async def cmd_usdt(message: types.Message, command: CommandObject):
+    await handle_add_balance(message, command, "USDT")
+
+@dp.message(Command("rub"))
+async def cmd_rub(message: types.Message, command: CommandObject):
+    await handle_add_balance(message, command, "RUB")
+
+@dp.message(Command("uzs"))
+async def cmd_uzs(message: types.Message, command: CommandObject):
+    await handle_add_balance(message, command, "UZS")
 
 @dp.message(Command("zero"))
 async def cmd_zero(message: types.Message):
     data = get_user_data(message.from_user.id)
-    data["balance"] = 0.0
-    await message.answer("✅ Ваш баланс успешно обнулен.")
+    data["balances"]["USDT"] = 0.0
+    data["balances"]["RUB"] = 0.0
+    data["balances"]["UZS"] = 0.0
+    await message.answer("✅ Все ваши балансы успешно обнулены.")
+
+# --- Вспомогательная функция отрисовки баланса ---
+
+async def render_balance_screen(callback: types.CallbackQuery):
+    data = get_user_data(callback.from_user.id)
+    curr = data["currency"]
+    balance = data["balances"][curr]
+    display_balance = int(balance) if balance.is_integer() else balance
+    cfg = CURRENCY_CONFIG[curr]
+    
+    text = (
+        f"Ваш баланс: {display_balance} {curr}.\n\n"
+        f"Минимальная сумма вывода: {cfg['min_withdraw']}.\n"
+        f"Максимальная сумма вывода: {cfg['max_withdraw']}.\n\n"
+        "‼️ После одобрения клипов средства начисляются на баланс канала.\n"
+        "Чтобы вывести, переведите их на баланс для вывода через меню управления каналами."
+    )
+    await callback.message.edit_text(text, reply_markup=get_balance_keyboard(curr))
 
 # --- 1. Раздел: Реквизиты ---
 
@@ -197,31 +255,28 @@ async def process_category_selected(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data == "btn_balance")
 async def process_balance(callback: types.CallbackQuery):
+    await render_balance_screen(callback)
+    await callback.answer()
+
+@dp.callback_query(F.data == "btn_change_currency")
+async def process_change_currency(callback: types.CallbackQuery):
     data = get_user_data(callback.from_user.id)
-    balance = data["balance"]
-    display_balance = int(balance) if balance.is_integer() else balance
-    
-    text = (
-        f"Ваш баланс: {display_balance} USDT.\n\n"
-        "Минимальная сумма вывода: 12.0 USDT.\n"
-        "Максимальная сумма вывода: — USDT.\n\n"
-        "‼️ После одобрения клипов средства начисляются на баланс канала.\n"
-        "Чтобы вывести, переведите их на баланс для вывода через меню управления каналами."
-    )
-    await callback.message.edit_text(text, reply_markup=get_balance_keyboard())
+    current_curr = data["currency"]
+    data["currency"] = CURRENCY_CONFIG[current_curr]["next"]
+    await render_balance_screen(callback)
     await callback.answer()
 
 @dp.callback_query(F.data == "btn_withdraw")
 async def process_withdraw(callback: types.CallbackQuery):
     data = get_user_data(callback.from_user.id)
-    if data["balance"] < 12.0:
-        await callback.answer("Недостаточно средств. Минимум 12.0 USDT.", show_alert=True)
+    curr = data["currency"]
+    balance = data["balances"][curr]
+    cfg = CURRENCY_CONFIG[curr]
+    
+    if balance < cfg["min_value"]:
+        await callback.answer(f"Недостаточно средств. Минимум {cfg['min_withdraw']}.", show_alert=True)
     else:
         await callback.answer("Запрос на вывод создан", show_alert=True)
-
-@dp.callback_query(F.data == "btn_change_currency")
-async def process_change_currency(callback: types.CallbackQuery):
-    await callback.answer("Функция смены валюты в разработке", show_alert=True)
 
 # --- 4. Раздел: Управление каналами ---
 
