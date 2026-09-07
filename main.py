@@ -25,7 +25,7 @@ def get_user_data(user_id: int):
     if user_id not in users_db:
         users_db[user_id] = {
             "balance": 0.0,
-            "channels": ["YT SHORTS • zuckerberg_br"] # Базовый канал для примера
+            "channels": ["YT SHORTS • zuckerberg_br"]
         }
     return users_db[user_id]
 
@@ -37,7 +37,8 @@ def get_main_keyboard():
     builder.button(text="Подача заявки", callback_data="btn_apply")
     builder.button(text="Баланс и вывод", callback_data="btn_balance")
     builder.button(text="Управление каналами", callback_data="btn_channels")
-    builder.button(text="Написать в поддержку", callback_data="btn_support")
+    # Кнопка с прямой ссылкой в поддержку
+    builder.button(text="Написать в поддержку", url="https://t.me/lixiauto")
     builder.button(text="Активные заявки", callback_data="btn_active_requests")
     builder.button(text="Правила и материалы", callback_data="btn_rules")
     builder.adjust(2, 2, 2, 1)
@@ -93,6 +94,18 @@ def get_my_channels_keyboard(user_channels):
         builder.button(text=ch, callback_data=f"info_ch_{ch}")
     builder.button(text="Назад", callback_data="btn_channels")
     builder.adjust(1)
+    return builder.as_markup()
+
+def get_rules_keyboard():
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Открыть правила", url="https://telegra.ph/ClipHub-ot-FunPay-bonusy-za-video-03-18")
+    builder.button(text="Вернуться в меню", callback_data="btn_main_menu")
+    builder.adjust(1)
+    return builder.as_markup()
+
+def get_back_to_menu_keyboard():
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Вернуться в меню", callback_data="btn_main_menu")
     return builder.as_markup()
 
 def get_cancel_keyboard():
@@ -178,7 +191,7 @@ async def process_apply_channel_selected(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data.startswith("cat_"))
 async def process_category_selected(callback: types.CallbackQuery):
-    await callback.answer("Категория выбрана! Сценарий дальше в разработке.", show_alert=True)
+    await callback.answer("Категория выбрана!", show_alert=True)
 
 # --- 3. Раздел: Баланс и вывод ---
 
@@ -238,20 +251,15 @@ async def process_add_channel_start(callback: types.CallbackQuery, state: FSMCon
     await callback.message.edit_text(text, reply_markup=get_cancel_keyboard())
     await callback.answer()
 
-# Прием ссылки на канал
 @dp.message(ChannelAddState.waiting_for_link)
 async def process_channel_link_input(message: types.Message, state: FSMContext):
     link = message.text.strip()
     if link.startswith("http://") or link.startswith("https://"):
         data = get_user_data(message.from_user.id)
-        # Для удобства сохраняем введенную ссылку в список каналов
         data["channels"].append(link)
         await state.clear()
         
-        builder = InlineKeyboardBuilder()
-        builder.button(text="Вернуться в меню", callback_data="btn_main_menu")
-        
-        await message.answer(f"✅ Канал успешно добавлен: {link}", reply_markup=builder.as_markup())
+        await message.answer(f"✅ Канал успешно добавлен: {link}", reply_markup=get_back_to_menu_keyboard())
     else:
         await message.answer("⚠️ Пожалуйста, отправьте корректную ссылку, начинающуюся с `https://`", parse_mode="Markdown")
 
@@ -266,11 +274,19 @@ async def process_my_channels(callback: types.CallbackQuery):
 async def process_channel_info(callback: types.CallbackQuery):
     await callback.answer("Информация о канале в разработке", show_alert=True)
 
-# --- Вспомогательные заглушки ---
+# --- 5. Раздел: Активные заявки ---
 
-@dp.callback_query(F.data.in_({"btn_support", "btn_active_requests", "btn_rules"}))
-async def process_placeholders(callback: types.CallbackQuery):
-    await callback.answer("Этот раздел в разработке", show_alert=True)
+@dp.callback_query(F.data == "btn_active_requests")
+async def process_active_requests(callback: types.CallbackQuery):
+    await callback.answer("Ошибка: у вас нет заявок", show_alert=True)
+
+# --- 6. Раздел: Правила и материалы ---
+
+@dp.callback_query(F.data == "btn_rules")
+async def process_rules(callback: types.CallbackQuery):
+    text = "Правила и материалы ClipHub:"
+    await callback.message.edit_text(text, reply_markup=get_rules_keyboard())
+    await callback.answer()
 
 async def main():
     await dp.start_polling(bot)
